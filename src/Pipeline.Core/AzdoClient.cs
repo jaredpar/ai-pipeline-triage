@@ -1,0 +1,232 @@
+using System.Net.Http.Headers;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Azure.Core;
+
+namespace Pipeline.Core;
+
+public class AzdoBuild
+{
+    [JsonPropertyName("id")]
+    public int Id { get; init; }
+
+    [JsonPropertyName("buildNumber")]
+    public required string BuildNumber { get; init; }
+
+    [JsonPropertyName("status")]
+    public required string Status { get; init; }
+
+    [JsonPropertyName("result")]
+    public string? Result { get; init; }
+
+    [JsonPropertyName("uri")]
+    public required string Uri { get; init; }
+
+    [JsonPropertyName("sourceBranch")]
+    public required string SourceBranch { get; init; }
+
+    [JsonPropertyName("definitionName")]
+    public required string DefinitionName { get; init; }
+
+    [JsonPropertyName("finishTime")]
+    public DateTime? FinishTime { get; init; }
+}
+
+public class AzdoTestFailure
+{
+    [JsonPropertyName("testCaseTitle")]
+    public required string TestCaseTitle { get; init; }
+
+    [JsonPropertyName("outcome")]
+    public required string Outcome { get; init; }
+
+    [JsonPropertyName("errorMessage")]
+    public string? ErrorMessage { get; init; }
+
+    [JsonPropertyName("stackTrace")]
+    public string? StackTrace { get; init; }
+
+    [JsonPropertyName("testRunId")]
+    public int TestRunId { get; init; }
+
+    [JsonPropertyName("testRunName")]
+    public required string TestRunName { get; init; }
+}
+
+public sealed class AzdoClient
+{
+    public const string DefaultOrganization = "dnceng-public";
+    public const string DefaultProject = "public";
+
+    private static readonly JsonSerializerOptions s_jsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private HttpClient HttpClient { get; }
+    private string Organization { get; }
+    private string Project { get; }
+
+    private AzdoClient(HttpClient httpClient, string organization, string project)
+    {
+        HttpClient = httpClient;
+        Organization = organization;
+        Project = project;
+    }
+
+    public static async Task<AzdoClient> CreateAsync(
+        TokenCredential tokenCredential,
+        string organization = DefaultOrganization,
+        string project = DefaultProject)
+    {
+        var tokenRequestContext = new TokenRequestContext(["499b84ac-1321-427f-aa17-267ca6975798/.default"]);
+        var token = await tokenCredential.GetTokenAsync(tokenRequestContext, default);
+
+        var httpClient = new HttpClient
+        {
+            BaseAddress = new Uri($"https://dev.azure.com/{organization}/{project}/"),
+        };
+        httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token.Token);
+
+        return new AzdoClient(httpClient, organization, project);
+    }
+
+    private string GetBuildUri(int buildId) =>
+        $"https://dev.azure.com/{Organization}/{Project}/_build/results?buildId={buildId}&view=results";
+
+    public async Task<List<AzdoBuild>> GetRecentBuildsAsync(int? definitionId = null, int top = 10)
+    {
+        var url = $"_apis/build/builds?api-version=7.1&$top={top}";
+        if (definitionId is not null)
+        {
+            url += $"&definitions={definitionId}";
+        }
+
+        var response = await HttpClient.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+
+        var json = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<AzdoListResponse<AzdoBuildRaw>>(json, s_jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize builds response");
+
+        return result.Value.Select(b => new AzdoBuild
+        {
+            Id = b.Id,
+            BuildNumber = b.BuildNumber,
+            Status = b.Status,
+            Result = b.Result,
+            Uri = GetBuildUri(b.Id),
+            SourceBranch = b.SourceBranch,
+            DefinitionName = b.Definition?.Name ?? "unknown",
+            FinishTime = b.FinishTime,
+        }).ToList();
+    }
+
+    public async Task<List<AzdoTestFailure>> GetTestFailuresAsync(int buildId)
+    {
+        var buildUri = $"vstfs:///Build/Build/{buildId}";
+        var runsUrl = $"_apis/test/runs?api-version=7.1&buildUri={Uri.EscapeDataString(buildUri)}";
+
+        var runsResponse = await HttpClient.GetAsync(runsUrl);
+        runsResponse.EnsureSuccessStatusCode();
+
+        var runsJson = await runsResponse.Content.ReadAsStringAsync();
+        var runs = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestRun>>(runsJson, s_jsonOptions)
+            ?? throw new InvalidOperationException("Failed to deserialize test runs response");
+
+        var failures = new List<AzdoTestFailure>();
+        foreach (var run in runs.Value)
+        {
+            var resultsUrl = $"_apis/test/Runs/{run.Id}/results?api-version=7.1&outcomes=Failed";
+            var resultsResponse = await HttpClient.GetAsync(resultsUrl);
+            resultsResponse.EnsureSuccessStatusCode();
+
+            var resultsJson = await resultsResponse.Content.ReadAsStringAsync();
+            var results = JsonSerializer.Deserialize<AzdoListResponse<AzdoTestResult>>(resultsJson, s_jsonOptions)
+                ?? throw new InvalidOperationException("Failed to deserialize test results response");
+
+            foreach (var r in results.Value)
+            {
+                failures.Add(new AzdoTestFailure
+                {
+                    TestCaseTitle = r.TestCaseTitle,
+                    Outcome = r.Outcome,
+                    ErrorMessage = r.ErrorMessage,
+                    StackTrace = r.StackTrace,
+                    TestRunId = run.Id,
+                    TestRunName = run.Name,
+                });
+            }
+        }
+
+        return failures;
+    }
+
+    // Internal types for JSON deserialization of raw API responses
+
+    private class AzdoListResponse<T>
+    {
+        [JsonPropertyName("count")]
+        public int Count { get; init; }
+
+        [JsonPropertyName("value")]
+        public required List<T> Value { get; init; }
+    }
+
+    private class AzdoBuildRaw
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; init; }
+
+        [JsonPropertyName("buildNumber")]
+        public required string BuildNumber { get; init; }
+
+        [JsonPropertyName("status")]
+        public required string Status { get; init; }
+
+        [JsonPropertyName("result")]
+        public string? Result { get; init; }
+
+        [JsonPropertyName("uri")]
+        public required string Uri { get; init; }
+
+        [JsonPropertyName("sourceBranch")]
+        public required string SourceBranch { get; init; }
+
+        [JsonPropertyName("definition")]
+        public AzdoBuildDefinition? Definition { get; init; }
+
+        [JsonPropertyName("finishTime")]
+        public DateTime? FinishTime { get; init; }
+    }
+
+    private class AzdoBuildDefinition
+    {
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
+    }
+
+    private class AzdoTestRun
+    {
+        [JsonPropertyName("id")]
+        public int Id { get; init; }
+
+        [JsonPropertyName("name")]
+        public required string Name { get; init; }
+    }
+
+    private class AzdoTestResult
+    {
+        [JsonPropertyName("testCaseTitle")]
+        public required string TestCaseTitle { get; init; }
+
+        [JsonPropertyName("outcome")]
+        public required string Outcome { get; init; }
+
+        [JsonPropertyName("errorMessage")]
+        public string? ErrorMessage { get; init; }
+
+        [JsonPropertyName("stackTrace")]
+        public string? StackTrace { get; init; }
+    }
+}
