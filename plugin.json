@@ -1,0 +1,19 @@
+{
+    "name": "pipeline-triage",
+    "description": "A simple plugin for testing scenarios",
+    "version": "1.0.0",
+    "author": {
+        "name": "Jared Parsons"
+    },
+    "mcpServers": {
+        "pipeline-triage": {
+            "command": "dotnet",
+            "args": [
+                "run",
+                "--project",
+                "src/Pipeline.Mcp/Pipeline.Mcp.csproj"
+            ],
+            "type": "stdio"
+      }
+    }
+}
