@@ -33,6 +33,10 @@ public class HelixWorkItem
     public long JobId { get; init; }
     [JsonPropertyName("jobName")]
     public required string JobName { get; init; }
+    [JsonPropertyName("finished")]
+    public DateTime Finished { get; init; }
+    [JsonPropertyName("workItemId")]
+    public long WorkItemId { get; init; }
 }
 
 public sealed class HelixClient
@@ -74,7 +78,7 @@ public sealed class HelixClient
             | extend ExecutionTime = (Finished - Started) / 1s
             | extend QueuedTime = (Started - Queued) / 1s
             {failedFilter}
-            | project FriendlyName, ExecutionTime, QueuedTime, AzdoBuildId, AzdoPhaseName, AzdoAttempt, MachineName, ExitCode, ConsoleUri, JobId, JobName, QueueName
+            | project FriendlyName, ExecutionTime, QueuedTime, AzdoBuildId, AzdoPhaseName, AzdoAttempt, MachineName, ExitCode, ConsoleUri, JobId, JobName, QueueName, Finished, WorkItemId
             """;
 
         return QueryHelixWorkItem(query);
@@ -96,7 +100,7 @@ public sealed class HelixClient
             | extend ExecutionTime = (Finished - Started) / 1s
             | extend QueuedTime = (Started - Queued) / 1s
             {failedFilter}
-            | project FriendlyName, ExecutionTime, QueuedTime, AzdoBuildId, AzdoPhaseName, AzdoAttempt, MachineName, ExitCode, ConsoleUri, JobId, JobName, QueueName
+            | project FriendlyName, ExecutionTime, QueuedTime, AzdoBuildId, AzdoPhaseName, AzdoAttempt, MachineName, ExitCode, ConsoleUri, JobId, JobName, QueueName, Finished, WorkItemId
             """;
 
         return QueryHelixWorkItem(query);
@@ -114,11 +118,6 @@ public sealed class HelixClient
             while (reader.Read())
             {
                 var friendlyName = reader.GetString(0);
-                if (!Regex.IsMatch(friendlyName, @"workitem_\d+"))
-                {
-                    continue;
-                }
-
                 var executionTime = TimeSpan.FromSeconds(reader.GetDouble(1));
                 var queuedTime = TimeSpan.FromSeconds(reader.GetDouble(2));
                 var azdoBuildId = reader.GetInt32(3);
@@ -130,6 +129,8 @@ public sealed class HelixClient
                 var jobId = reader.GetInt64(9);
                 var jobName = reader.GetString(10);
                 var queueName = reader.GetString(11);
+                var finished = reader.GetDateTime(12);
+                var workItemId = reader.GetInt64(13);
 
                 list.Add(new HelixWorkItem
                 {
@@ -144,7 +145,9 @@ public sealed class HelixClient
                     ConsoleUri = consoleUri,
                     JobId = jobId,
                     JobName = jobName,
-                    QueueName = queueName
+                    QueueName = queueName,
+                    Finished = finished,
+                    WorkItemId = workItemId
                 });
             }
 
