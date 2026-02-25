@@ -18,7 +18,7 @@ public class HelixMcpTools
         [Description("The AzDo build number")] int buildNumber,
         [Description("If true, include all work items including succeeded ones. Default returns only failed items.")] bool includeAll = false)
     {
-        var items = await helix.GetHelixWorkItemsForBuild(owner, repository, buildNumber, includeAll);
+        var items = await helix.GetHelixWorkItemsForBuildAsync(owner, repository, buildNumber, includeAll);
         return JsonSerializer.Serialize(items, s_jsonOptions);
     }
 

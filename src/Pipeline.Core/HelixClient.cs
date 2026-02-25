@@ -39,6 +39,16 @@ public class HelixWorkItem
     public long WorkItemId { get; init; }
 }
 
+public class HelixWorkItemConsole
+{
+    [JsonPropertyName("jobId")]
+    public long JobId { get; init; }
+    [JsonPropertyName("workItemId")]
+    public long WorkItemId { get; init; }
+    [JsonPropertyName("text")]
+    public required string Text { get; init; }
+}
+
 public sealed class HelixClient
 {
     private const string ClusterUrl = "https://engsrvprod.kusto.windows.net";
@@ -62,7 +72,7 @@ public sealed class HelixClient
         return new HelixClient(token);
     } 
 
-    public Task<List<HelixWorkItem>> GetHelixWorkItemsForBuild(string owner, string repository, int buildNumber, bool includeAll = false)
+    public Task<List<HelixWorkItem>> GetHelixWorkItemsForBuildAsync(string owner, string repository, int buildNumber, bool includeAll = false)
     {
         var failedFilter = includeAll ? "" : "| where ExitCode != 0";
         string query = $"""
@@ -104,6 +114,26 @@ public sealed class HelixClient
             """;
 
         return QueryHelixWorkItem(query);
+    }
+
+    public async Task<HelixWorkItem> GetHelixWorkItemAsync(long jobId, long workItemId)
+    {
+        string query = $"""
+            WorkItems
+            | where JobId == {jobId}
+            | where WorkItemId == {workItemId}
+            | join kind=inner Jobs on JobId
+            | extend p = parse_json(Properties)
+            | extend AzdoPhaseName = tostring(p["System.PhaseName"])
+            | extend AzdoAttempt = tostring(p["System.JobAttempt"])
+            | extend AzdoBuildId = toint(p["BuildId"])
+            | extend ExecutionTime = (Finished - Started) / 1s
+            | extend QueuedTime = (Started - Queued) / 1s
+            | project FriendlyName, ExecutionTime, QueuedTime, AzdoBuildId, AzdoPhaseName, AzdoAttempt, MachineName, ExitCode, ConsoleUri, JobId, JobName, QueueName, Finished, WorkItemId
+            """;
+
+        var items = await QueryHelixWorkItem(query);
+        return items.Single();
     }
 
     private async Task<List<HelixWorkItem>> QueryHelixWorkItem(string query)
@@ -159,5 +189,34 @@ public sealed class HelixClient
             Console.WriteLine("Error reading Kusto, are you connected to the VPN?");
             throw;
         }
+    }
+
+    public async Task<HelixWorkItemConsole> GetConsoleAsync(HelixWorkItem workItem)
+    {
+        using var httpClient = new HttpClient();
+        var text = await httpClient.GetStringAsync(workItem.ConsoleUri);
+        return new HelixWorkItemConsole
+        {
+            JobId = workItem.JobId,
+            WorkItemId = workItem.WorkItemId,
+            Text = text
+        };
+    }
+
+    public async Task<List<HelixWorkItemConsole>> GetConsolesAsync(List<HelixWorkItem> workItems)
+    {
+        using var httpClient = new HttpClient();
+        var list = new List<HelixWorkItemConsole>();
+        foreach (var workItem in workItems)
+        {
+            var text = await httpClient.GetStringAsync(workItem.ConsoleUri);
+            list.Add(new HelixWorkItemConsole
+            {
+                JobId = workItem.JobId,
+                WorkItemId = workItem.WorkItemId,
+                Text = text
+            });
+        }
+        return list;
     }
 }

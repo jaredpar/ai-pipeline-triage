@@ -32,6 +32,7 @@ static async Task<int> RunHelixAsync(string[] args)
     return action switch
     {
         "workitems" => await RunHelixWorkItemsAsync(actionArgs),
+        "console" => await RunHelixConsoleAsync(actionArgs),
         _ => PrintHelixUsage(),
     };
 }
@@ -85,11 +86,92 @@ static async Task<int> RunHelixWorkItemsAsync(string[] args)
             Console.Error.WriteLine($"Error: --build must be an integer, got '{buildValue}'");
             return 1;
         }
-        workItems = await helix.GetHelixWorkItemsForBuild(owner, repository, buildNumber, includeAll);
+        workItems = await helix.GetHelixWorkItemsForBuildAsync(owner, repository, buildNumber, includeAll);
     }
 
     var options = new JsonSerializerOptions { WriteIndented = true };
     Console.WriteLine(JsonSerializer.Serialize(workItems, options));
+    return 0;
+}
+
+static async Task<int> RunHelixConsoleAsync(string[] args)
+{
+    var repo = GetOption(args, "--repo");
+    var prValue = GetOption(args, "--pr");
+    var buildValue = GetOption(args, "--build");
+    var jobIdValue = GetOption(args, "--jobid");
+    var workItemIdValue = GetOption(args, "--workitemid");
+    var includeAll = HasFlag(args, "--all");
+
+    var credential = new DefaultAzureCredential();
+    var helix = await HelixClient.CreateAsync(credential);
+
+    if (jobIdValue is not null && workItemIdValue is not null)
+    {
+        if (!long.TryParse(jobIdValue, out var jobId))
+        {
+            Console.Error.WriteLine($"Error: --jobid must be a long, got '{jobIdValue}'");
+            return 1;
+        }
+
+        if (!long.TryParse(workItemIdValue, out var workItemId))
+        {
+            Console.Error.WriteLine($"Error: --workitemid must be a long, got '{workItemIdValue}'");
+            return 1;
+        }
+
+        var workItem = await helix.GetHelixWorkItemAsync(jobId, workItemId);
+        var console = await helix.GetConsoleAsync(workItem);
+        var options = new JsonSerializerOptions { WriteIndented = true };
+        Console.WriteLine(JsonSerializer.Serialize(console, options));
+        return 0;
+    }
+
+    if (repo is null)
+    {
+        PrintHelixUsage();
+        return 1;
+    }
+
+    var parts = repo.Split('/');
+    if (parts.Length != 2)
+    {
+        Console.Error.WriteLine($"Error: --repo must be in owner/repository format, got '{repo}'");
+        return 1;
+    }
+
+    var owner = parts[0];
+    var repository = parts[1];
+
+    if (prValue is null && buildValue is null)
+    {
+        PrintHelixUsage();
+        return 1;
+    }
+
+    List<HelixWorkItem> workItems;
+    if (prValue is not null)
+    {
+        if (!int.TryParse(prValue, out var prNumber))
+        {
+            Console.Error.WriteLine($"Error: --pr must be an integer, got '{prValue}'");
+            return 1;
+        }
+        workItems = await helix.GetHelixWorkItemsForPullRequestAsync(owner, repository, prNumber, includeAll);
+    }
+    else
+    {
+        if (!int.TryParse(buildValue, out var buildNumber))
+        {
+            Console.Error.WriteLine($"Error: --build must be an integer, got '{buildValue}'");
+            return 1;
+        }
+        workItems = await helix.GetHelixWorkItemsForBuildAsync(owner, repository, buildNumber, includeAll);
+    }
+
+    var consoles = await helix.GetConsolesAsync(workItems);
+    var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+    Console.WriteLine(JsonSerializer.Serialize(consoles, jsonOptions));
     return 0;
 }
 
@@ -208,6 +290,9 @@ static int PrintHelixUsage()
     Console.Error.WriteLine("Usage:");
     Console.Error.WriteLine("  pipeline helix workitems --repo <owner/repo> --pr <number> [--all]");
     Console.Error.WriteLine("  pipeline helix workitems --repo <owner/repo> --build <number> [--all]");
+    Console.Error.WriteLine("  pipeline helix console --repo <owner/repo> --pr <number> [--all]");
+    Console.Error.WriteLine("  pipeline helix console --repo <owner/repo> --build <number> [--all]");
+    Console.Error.WriteLine("  pipeline helix console --jobid <id> --workitemid <id>");
     return 1;
 }
 
